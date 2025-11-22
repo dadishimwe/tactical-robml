@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ROBOT CONTROL SYSTEM</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="/static/css/style.css">
+    
+    <!-- Socket.IO for real-time updates -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- Top Status Bar -->
+    <div class="status-bar">
+        <div class="status-left">
+            <div class="status-item">
+                <span class="status-icon" id="connection-status">●</span>
+                <span class="status-label">CONN</span>
+            </div>
+            <div class="status-item">
+                <div class="battery-bar">
+                    <div class="battery-fill" id="battery-fill"></div>
+                </div>
+                <span class="status-label">PWR</span>
+            </div>
+        </div>
+        
+        <div class="status-center">
+            <span class="mission-title">TACTICAL CONTROL INTERFACE</span>
+        </div>
+        
+        <div class="status-right">
+            <button class="record-btn" id="record-btn" onclick="toggleRecording()">
+                <span class="record-icon">●</span> REC
+            </button>
+            <span class="time-display" id="time-display">00:00:00</span>
+            <button class="settings-btn" onclick="toggleSettings()">⚙</button>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Left Control Panel -->
+        <div class="control-panel left-panel">
+            <div class="panel-header">MOVEMENT</div>
+            
+            <!-- D-Pad Controls -->
+            <div class="dpad-container">
+                <div class="dpad">
+                    <button class="dpad-btn dpad-up" onmousedown="sendCommand('motor/forward')" onmouseup="sendCommand('motor/stop')" ontouchstart="sendCommand('motor/forward')" ontouchend="sendCommand('motor/stop')">
+                        <span>▲</span>
+                    </button>
+                    <button class="dpad-btn dpad-left" onmousedown="sendCommand('motor/left')" onmouseup="sendCommand('motor/stop')" ontouchstart="sendCommand('motor/left')" ontouchend="sendCommand('motor/stop')">
+                        <span>◄</span>
+                    </button>
+                    <button class="dpad-btn dpad-center" onclick="sendCommand('motor/stop')">
+                        <span>■</span>
+                    </button>
+                    <button class="dpad-btn dpad-right" onmousedown="sendCommand('motor/right')" onmouseup="sendCommand('motor/stop')" ontouchstart="sendCommand('motor/right')" ontouchend="sendCommand('motor/stop')">
+                        <span>►</span>
+                    </button>
+                    <button class="dpad-btn dpad-down" onmousedown="sendCommand('motor/backward')" onmouseup="sendCommand('motor/stop')" ontouchstart="sendCommand('motor/backward')" ontouchend="sendCommand('motor/stop')">
+                        <span>▼</span>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Speed Control -->
+            <div class="speed-control">
+                <div class="control-label">SPEED</div>
+                <input type="range" id="speed-slider" min="50" max="255" value="200" oninput="updateSpeed(this.value)">
+                <div class="speed-display" id="speed-display">200</div>
+            </div>
+            
+            <!-- Mode Controls -->
+            <div class="mode-controls">
+                <button class="mode-btn" id="auto-btn" onclick="toggleAutonomous()">
+                    <span class="mode-icon">🤖</span>
+                    <span class="mode-label">AUTO</span>
+                </button>
+                <button class="mode-btn" id="ml-btn" onclick="toggleML()">
+                    <span class="mode-icon">👁</span>
+                    <span class="mode-label">ML</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Center Video Feed -->
+        <div class="video-container">
+            <img src="/video_feed" class="video-feed" id="video-feed" alt="Camera Feed">
+            
+            <!-- HUD Overlay -->
+            <div class="hud-overlay" id="hud-overlay">
+                <!-- Crosshair -->
+                <div class="crosshair"></div>
+                
+                <!-- Compass -->
+                <div class="compass">
+                    <div class="compass-needle"></div>
+                    <span class="compass-label">N</span>
+                </div>
+                
+                <!-- Distance Radar -->
+                <div class="distance-radar">
+                    <div class="radar-circle"></div>
+                    <div class="radar-sweep"></div>
+                    <div class="radar-blip" id="radar-blip"></div>
+                    <div class="distance-value" id="distance-display">
+                        <span class="distance-number">--</span>
+                        <span class="distance-unit">cm</span>
+                    </div>
+                </div>
+                
+                <!-- Status Indicators -->
+                <div class="hud-status">
+                    <div class="hud-item">
+                        <span class="hud-label">SPD</span>
+                        <span class="hud-value" id="hud-speed">200</span>
+                    </div>
+                    <div class="hud-item">
+                        <span class="hud-label">DIR</span>
+                        <span class="hud-value" id="hud-direction">STOP</span>
+                    </div>
+                </div>
+                
+                <!-- Scan Lines Effect -->
+                <div class="scanlines"></div>
+            </div>
+        </div>
+
+        <!-- Right Control Panel -->
+        <div class="control-panel right-panel">
+            <div class="panel-header">SERVOS</div>
+            
+            <!-- Servo Sliders -->
+            <div class="servo-controls">
+                <div class="servo-slider">
+                    <div class="servo-label">S1</div>
+                    <input type="range" class="vertical-slider" id="servo1" min="0" max="180" value="90" orient="vertical" oninput="updateServo(1, this.value)">
+                    <div class="servo-value" id="servo1-value">90°</div>
+                </div>
+                
+                <div class="servo-slider">
+                    <div class="servo-label">S2</div>
+                    <input type="range" class="vertical-slider" id="servo2" min="0" max="180" value="90" orient="vertical" oninput="updateServo(2, this.value)">
+                    <div class="servo-value" id="servo2-value">90°</div>
+                </div>
+                
+                <div class="servo-slider">
+                    <div class="servo-label">S3</div>
+                    <input type="range" class="vertical-slider" id="servo3" min="0" max="180" value="90" orient="vertical" oninput="updateServo(3, this.value)">
+                    <div class="servo-value" id="servo3-value">90°</div>
+                </div>
+                
+                <div class="servo-slider">
+                    <div class="servo-label">S4</div>
+                    <input type="range" class="vertical-slider" id="servo4" min="0" max="180" value="90" orient="vertical" oninput="updateServo(4, this.value)">
+                    <div class="servo-value" id="servo4-value">90°</div>
+                </div>
+            </div>
+            
+            <!-- Servo Presets -->
+            <div class="preset-controls">
+                <div class="control-label">PRESETS</div>
+                <div class="preset-grid">
+                    <button class="preset-btn" onclick="loadPreset(0)">HOME</button>
+                    <button class="preset-btn" onclick="loadPreset(1)">SCAN</button>
+                    <button class="preset-btn" onclick="loadPreset(2)">GRIP</button>
+                    <button class="preset-btn" onclick="loadPreset(3)">LEFT</button>
+                    <button class="preset-btn" onclick="loadPreset(4)">RIGHT</button>
+                    <button class="preset-btn" onclick="loadPreset(5)">UP</button>
+                    <button class="preset-btn" onclick="loadPreset(6)">DOWN</button>
+                    <button class="preset-btn" onclick="centerServos()">CENTER</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom Telemetry Panel (Collapsible) -->
+    <div class="telemetry-panel" id="telemetry-panel">
+        <div class="telemetry-header" onclick="toggleTelemetry()">
+            <span>TELEMETRY DATA</span>
+            <span class="toggle-icon" id="telemetry-toggle">▲</span>
+        </div>
+        <div class="telemetry-content" id="telemetry-content">
+            <div class="telemetry-grid">
+                <div class="telemetry-card">
+                    <div class="telemetry-title">SYSTEM STATUS</div>
+                    <div class="telemetry-data">
+                        <div class="data-row">
+                            <span>Uptime:</span>
+                            <span id="uptime">00:00:00</span>
+                        </div>
+                        <div class="data-row">
+                            <span>Commands:</span>
+                            <span id="command-count">0</span>
+                        </div>
+                        <div class="data-row">
+                            <span>Mode:</span>
+                            <span id="current-mode">MANUAL</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="telemetry-card">
+                    <div class="telemetry-title">DISTANCE STATS</div>
+                    <div class="telemetry-data">
+                        <div class="data-row">
+                            <span>Current:</span>
+                            <span id="dist-current">-- cm</span>
+                        </div>
+                        <div class="data-row">
+                            <span>Min:</span>
+                            <span id="dist-min">-- cm</span>
+                        </div>
+                        <div class="data-row">
+                            <span>Max:</span>
+                            <span id="dist-max">-- cm</span>
+                        </div>
+                        <div class="data-row">
+                            <span>Avg:</span>
+                            <span id="dist-avg">-- cm</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="telemetry-card">
+                    <div class="telemetry-title">ACTIONS</div>
+                    <div class="telemetry-actions">
+                        <button class="action-btn" onclick="exportTelemetry()">EXPORT CSV</button>
+                        <button class="action-btn" onclick="refreshStats()">REFRESH</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal" id="settings-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>SETTINGS</h2>
+                <button class="close-btn" onclick="toggleSettings()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-group">
+                    <label>HUD Overlay</label>
+                    <button class="toggle-btn" id="hud-toggle-btn" onclick="toggleHUD()">ON</button>
+                </div>
+                <div class="setting-group">
+                    <label>Keyboard Controls</label>
+                    <button class="toggle-btn" id="keyboard-toggle-btn" onclick="toggleKeyboard()">ON</button>
+                </div>
+                <div class="setting-group">
+                    <label>Video Quality</label>
+                    <select id="quality-select">
+                        <option value="low">Low (320p)</option>
+                        <option value="medium" selected>Medium (480p)</option>
+                        <option value="high">High (720p)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/js/controls.js"></script>
+    <script src="/static/js/keyboard.js"></script>
+    <script src="/static/js/telemetry.js"></script>
+</body>
+</html>

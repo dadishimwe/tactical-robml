@@ -1,0 +1,44 @@
+# ============================================================================
+# ROBOT CONTROL SYSTEM - PYTHON DEPENDENCIES
+# ============================================================================
+
+# Core Flask application
+Flask==3.0.0
+flask-socketio==5.3.5
+python-socketio==5.10.0
+
+# Serial communication
+pyserial==3.5
+
+# Camera support (Pi Camera)
+picamera2==0.3.16
+
+# OpenCV for image processing
+opencv-python==4.8.1.78
+
+# Optional: ML/AI dependencies (install only if using ML features)
+# Uncomment the following lines to enable ML object detection:
+# torch==2.1.0
+# torchvision==0.16.0
+# ultralytics==8.0.200  # YOLOv8
+
+# Optional: Additional utilities
+numpy==1.24.3
+Pillow==10.1.0
+
+# ============================================================================
+# INSTALLATION INSTRUCTIONS
+# ============================================================================
+#
+# Basic installation (without ML):
+#   pip install -r requirements.txt
+#
+# Full installation (with ML):
+#   1. Uncomment the torch, torchvision, and ultralytics lines above
+#   2. pip install -r requirements.txt
+#
+# Note: On Raspberry Pi, some packages may need system dependencies:
+#   sudo apt-get update
+#   sudo apt-get install -y python3-opencv python3-picamera2
+#
+# ============================================================================

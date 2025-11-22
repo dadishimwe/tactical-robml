@@ -6,15 +6,18 @@
 Flask==3.0.0
 flask-socketio==5.3.5
 python-socketio==5.10.0
+python-engineio==4.8.0
+eventlet==0.33.3
 
 # Serial communication
 pyserial==3.5
 
-# Camera support (Pi Camera)
-picamera2==0.3.16
+# OpenCV for image processing (use system package instead)
+# opencv-python==4.8.1.78
 
-# OpenCV for image processing
-opencv-python==4.8.1.78
+# Basic utilities
+numpy==1.24.3
+Pillow==10.1.0
 
 # Optional: ML/AI dependencies (install only if using ML features)
 # Uncomment the following lines to enable ML object detection:
@@ -22,23 +25,34 @@ opencv-python==4.8.1.78
 # torchvision==0.16.0
 # ultralytics==8.0.200  # YOLOv8
 
-# Optional: Additional utilities
-numpy==1.24.3
-Pillow==10.1.0
-
 # ============================================================================
-# INSTALLATION INSTRUCTIONS
+# IMPORTANT: Camera and OpenCV Installation
 # ============================================================================
+# 
+# DO NOT install picamera2 or opencv-python via pip in venv!
+# These require system packages. Use the system Python packages instead.
 #
-# Basic installation (without ML):
-#   pip install -r requirements.txt
+# Option 1: Use system site-packages (RECOMMENDED)
+# -------------------------------------------------
+# Instead of creating a venv, use system Python with --break-system-packages:
 #
-# Full installation (with ML):
-#   1. Uncomment the torch, torchvision, and ultralytics lines above
-#   2. pip install -r requirements.txt
+#   pip3 install --break-system-packages Flask flask-socketio pyserial
 #
-# Note: On Raspberry Pi, some packages may need system dependencies:
+# Or create venv with system packages access:
+#
+#   python3 -m venv --system-site-packages venv
+#   source venv/bin/activate
+#   pip install Flask flask-socketio pyserial
+#
+# Option 2: Install system packages first
+# ----------------------------------------
+# Before creating venv, install system packages:
+#
 #   sudo apt-get update
 #   sudo apt-get install -y python3-opencv python3-picamera2
+#
+# Then create venv WITH system site packages:
+#
+#   python3 -m venv --system-site-packages venv
 #
 # ============================================================================

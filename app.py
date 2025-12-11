@@ -347,7 +347,7 @@ except ImportError:
 def toggle_ml():
     """Toggle ML object detection"""
     if not ML_AVAILABLE:
-        return jsonify({'error': 'ML module not available'}), 400
+        return jsonify({'error': 'ML module not available.'}), 400
     
     data = request.get_json()
     enable = data.get('enable', False)

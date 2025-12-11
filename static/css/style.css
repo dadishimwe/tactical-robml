@@ -60,7 +60,7 @@ input[type="range"] {
     background: transparent;
 }
 
-/* ========== STATUS BAR ========== */
+/* ========== STATUS BAR STYLES ========== */
 .status-bar {
     display: flex;
     justify-content: space-between;

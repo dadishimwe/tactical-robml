@@ -1,278 +1,526 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>ROBOT CONTROL SYSTEM </title>
-    
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
-    <!-- Styles -->
-    <link rel="stylesheet" href="/static/css/style.css">
-    
-    <!-- Socket.IO for real-time updates -->
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TACTICAL ROBOT — CONTROL SYSTEM</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg-base:    #0a0c0f;
+      --bg-panel:   #111418;
+      --bg-card:    #161b22;
+      --bg-hover:   #1c2330;
+      --border:     #21262d;
+      --border-hi:  #30363d;
+      --accent:     #00e5a0;
+      --accent-dim: #00a870;
+      --warn:       #f0a500;
+      --danger:     #ff4d4d;
+      --info:       #58a6ff;
+      --purple:     #a371f7;
+      --text-hi:    #e6edf3;
+      --text-md:    #8b949e;
+      --text-lo:    #484f58;
+      --font-mono:  "JetBrains Mono","Fira Code","Cascadia Code",monospace;
+      --font-ui:    -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      --radius:     6px;
+    }
+    html, body { height: 100%; background: var(--bg-base); color: var(--text-hi); font-family: var(--font-ui); font-size: 13px; overflow: hidden; }
+    #app { display: grid; grid-template-rows: 44px 1fr; grid-template-columns: 280px 1fr 300px; grid-template-areas: "header header header" "left center right"; height: 100vh; gap: 1px; background: var(--border); }
+
+    /* Header */
+    #header { grid-area: header; background: var(--bg-panel); display: flex; align-items: center; padding: 0 16px; gap: 12px; border-bottom: 1px solid var(--border); }
+    .logo { font-family: var(--font-mono); font-size: 11px; font-weight: 700; letter-spacing: 3px; color: var(--accent); }
+    .sep { flex: 1; }
+    .status-pill { display: flex; align-items: center; gap: 6px; background: var(--bg-card); border: 1px solid var(--border-hi); border-radius: 20px; padding: 3px 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-md); }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-lo); }
+    .dot.on   { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    .dot.warn { background: var(--warn); }
+    .dot.err  { background: var(--danger); }
+    #latency-badge { font-family: var(--font-mono); font-size: 10px; color: var(--text-md); }
+
+    /* Panels */
+    .panel { background: var(--bg-panel); overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+    .panel::-webkit-scrollbar { width: 4px; }
+    .panel::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
+    #left-panel  { grid-area: left; }
+    #center-panel{ grid-area: center; background: var(--bg-base); overflow: hidden; }
+    #right-panel { grid-area: right; }
+
+    /* Cards */
+    .card { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 12px 14px; }
+    .card-title { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 2px; color: var(--text-md); text-transform: uppercase; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+    .card-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+    /* Video */
+    #video-container { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #000; }
+    #video-feed { max-width: 100%; max-height: 100%; object-fit: contain; }
+    #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 40px; height: 40px; pointer-events: none; }
+    #crosshair::before { content: ""; position: absolute; width: 1px; height: 100%; left: 50%; top: 0; background: rgba(0,229,160,.6); }
+    #crosshair::after  { content: ""; position: absolute; height: 1px; width: 100%; top: 50%; left: 0; background: rgba(0,229,160,.6); }
+    .hud-badge { position: absolute; font-family: var(--font-mono); font-size: 9px; color: var(--accent); background: rgba(0,0,0,.55); padding: 2px 6px; border-radius: 3px; border: 1px solid rgba(0,229,160,.25); }
+    #hud-mode { top: 8px; left: 8px; }
+    #hud-fps  { top: 8px; right: 8px; }
+    #hud-dist { bottom: 8px; left: 8px; }
+    #hud-rec  { bottom: 8px; right: 8px; color: var(--danger); display: none; }
+    #hud-rec.active { display: block; }
+
+    /* D-Pad */
+    .dpad { display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(3, 48px); gap: 4px; justify-content: center; }
+    .dpad-btn { background: var(--bg-hover); border: 1px solid var(--border-hi); border-radius: var(--radius); color: var(--text-hi); font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .1s; user-select: none; }
+    .dpad-btn:active, .dpad-btn.pressed { background: var(--accent-dim); border-color: var(--accent); transform: scale(.94); }
+    .stop-btn { background: rgba(255,77,77,.15) !important; border-color: rgba(255,77,77,.4) !important; color: var(--danger) !important; font-size: 11px !important; font-family: var(--font-mono) !important; font-weight: 700; }
+    .dpad-empty { visibility: hidden; }
+
+    /* Speed */
+    .speed-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+    .speed-row label { font-family: var(--font-mono); font-size: 10px; color: var(--text-md); width: 40px; }
+    input[type=range] { flex: 1; -webkit-appearance: none; height: 4px; background: var(--border-hi); border-radius: 2px; outline: none; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+    #speed-val { font-family: var(--font-mono); font-size: 10px; color: var(--accent); width: 28px; text-align: right; }
+
+    /* Servo */
+    .servo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .servo-row label { font-family: var(--font-mono); font-size: 10px; color: var(--text-md); width: 52px; }
+    .servo-val { font-family: var(--font-mono); font-size: 10px; color: var(--info); width: 28px; text-align: right; }
+
+    /* Buttons */
+    .toggle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .toggle-btn { background: var(--bg-hover); border: 1px solid var(--border-hi); border-radius: var(--radius); color: var(--text-md); font-family: var(--font-mono); font-size: 10px; padding: 8px 6px; cursor: pointer; text-align: center; transition: all .15s; user-select: none; }
+    .toggle-btn:hover { border-color: var(--accent); color: var(--text-hi); }
+    .toggle-btn.active { background: rgba(0,229,160,.12); border-color: var(--accent); color: var(--accent); }
+    .toggle-btn.warn-active { background: rgba(240,165,0,.12); border-color: var(--warn); color: var(--warn); }
+    .toggle-btn.danger-active { background: rgba(255,77,77,.12); border-color: var(--danger); color: var(--danger); }
+    .row { display: flex; gap: 6px; }
+    .full-btn { flex: 1; padding: 8px; border-radius: var(--radius); border: 1px solid var(--border-hi); background: var(--bg-hover); color: var(--text-hi); font-family: var(--font-mono); font-size: 10px; cursor: pointer; text-align: center; transition: all .15s; }
+    .full-btn:hover { border-color: var(--accent); }
+    .full-btn.primary { background: rgba(0,229,160,.15); border-color: var(--accent); color: var(--accent); }
+    .full-btn.danger  { background: rgba(255,77,77,.1); border-color: rgba(255,77,77,.5); color: var(--danger); }
+
+    /* LED */
+    .led-modes { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+    .led-mode-btn { padding: 4px 8px; border-radius: 12px; border: 1px solid var(--border-hi); background: var(--bg-hover); color: var(--text-md); font-family: var(--font-mono); font-size: 9px; cursor: pointer; transition: all .15s; }
+    .led-mode-btn:hover, .led-mode-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(0,229,160,.1); }
+    #led-color-input { width: 100%; height: 28px; border: 1px solid var(--border-hi); border-radius: var(--radius); background: var(--bg-hover); cursor: pointer; padding: 2px; }
+
+    /* Radar */
+    #radar-canvas { display: block; margin: 0 auto; }
+
+    /* IMU */
+    .imu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .imu-cell { background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
+    .imu-cell .label { font-family: var(--font-mono); font-size: 9px; color: var(--text-lo); text-transform: uppercase; }
+    .imu-cell .value { font-family: var(--font-mono); font-size: 14px; color: var(--info); margin-top: 2px; }
+    .imu-cell .value.warn { color: var(--warn); }
+    .imu-cell .value.danger { color: var(--danger); }
+
+    /* Power */
+    .power-bar-wrap { background: var(--bg-hover); border-radius: 3px; height: 8px; overflow: hidden; margin: 6px 0; }
+    .power-bar { height: 100%; background: var(--accent); border-radius: 3px; transition: width .5s, background .5s; }
+    .power-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 6px; }
+    .power-stat { background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--radius); padding: 5px 6px; text-align: center; }
+    .ps-label { font-family: var(--font-mono); font-size: 8px; color: var(--text-lo); }
+    .ps-val { font-family: var(--font-mono); font-size: 12px; color: var(--text-hi); margin-top: 1px; }
+
+    /* Sparklines */
+    .sparkline-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .sl-label { font-family: var(--font-mono); font-size: 9px; color: var(--text-md); width: 28px; }
+    .sparkline-row canvas { flex: 1; height: 28px !important; }
+    .sl-val { font-family: var(--font-mono); font-size: 10px; color: var(--text-hi); width: 36px; text-align: right; }
+
+    /* Event Log */
+    #event-log { font-family: var(--font-mono); font-size: 10px; line-height: 1.6; max-height: 160px; overflow-y: auto; color: var(--text-md); }
+    #event-log::-webkit-scrollbar { width: 3px; }
+    #event-log::-webkit-scrollbar-thumb { background: var(--border-hi); }
+    .log-entry { padding: 1px 0; }
+    .log-entry .ts  { color: var(--text-lo); }
+    .log-entry .src { color: var(--info); }
+    .log-entry.WARN .msg    { color: var(--warn); }
+    .log-entry.CRITICAL .msg { color: var(--danger); }
+
+    /* Connections */
+    .conn-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--border); }
+    .conn-row:last-child { border-bottom: none; }
+    .conn-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-md); }
+    .conn-badge { font-family: var(--font-mono); font-size: 9px; padding: 2px 7px; border-radius: 10px; border: 1px solid; }
+    .conn-badge.ok   { color: var(--accent); border-color: var(--accent-dim); background: rgba(0,229,160,.08); }
+    .conn-badge.fail { color: var(--danger); border-color: rgba(255,77,77,.4); background: rgba(255,77,77,.08); }
+    .conn-badge.warn { color: var(--warn); border-color: rgba(240,165,0,.4); background: rgba(240,165,0,.08); }
+
+    /* Auto mode */
+    .auto-mode-row { display: flex; gap: 6px; margin-bottom: 8px; }
+    .auto-mode-btn { flex: 1; padding: 6px; border-radius: var(--radius); border: 1px solid var(--border-hi); background: var(--bg-hover); color: var(--text-md); font-family: var(--font-mono); font-size: 10px; cursor: pointer; text-align: center; transition: all .15s; }
+    .auto-mode-btn.selected { border-color: var(--info); color: var(--info); background: rgba(88,166,255,.1); }
+
+    /* Alert Toast */
+    #alert-container { position: fixed; top: 52px; right: 12px; z-index: 999; display: flex; flex-direction: column; gap: 6px; }
+    .alert-toast { background: var(--bg-card); border: 1px solid var(--border-hi); border-radius: var(--radius); padding: 8px 12px; font-family: var(--font-mono); font-size: 10px; color: var(--text-hi); box-shadow: 0 4px 24px rgba(0,0,0,.6); animation: slideIn .2s ease; max-width: 280px; }
+    .alert-toast.WARN     { border-left: 3px solid var(--warn); }
+    .alert-toast.CRITICAL { border-left: 3px solid var(--danger); }
+    .alert-toast.INFO     { border-left: 3px solid var(--info); }
+    @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  </style>
 </head>
 <body>
-    <!-- Top Status Bar -->
-    <div class="status-bar">
-        <div class="status-left">
-            <div class="status-item">
-                <span class="status-icon" id="connection-status">●</span>
-                <span class="status-label">CONN</span>
-            </div>
-            <div class="status-item">
-                <div class="battery-bar">
-                    <div class="battery-fill" id="battery-fill"></div>
-                </div>
-                <span class="status-label">PWR</span>
-            </div>
-        </div>
-        
-        <div class="status-center">
-            <span class="mission-title">TACTICAL CONTROL INTERFACE</span>
-        </div>
-        
-        <div class="status-right">
-            <button class="record-btn" id="record-btn" onclick="toggleRecording()">
-                <span class="record-icon">●</span> REC
-            </button>
-            <span class="time-display" id="time-display">00:00:00</span>
-            <button class="settings-btn" onclick="toggleSettings()">⚙</button>
-        </div>
+<div id="app">
+
+  <!-- HEADER -->
+  <header id="header">
+    <div class="logo">&#9632; TACTICAL ROBOT</div>
+    <div class="status-pill"><div class="dot" id="ws-dot"></div><span id="ws-label">OFFLINE</span></div>
+    <div class="status-pill"><div class="dot" id="motor-dot"></div><span>MOTOR</span></div>
+    <div class="status-pill"><div class="dot" id="servo-dot"></div><span>SERVO</span></div>
+    <div class="status-pill"><div class="dot" id="imu-dot"></div><span>IMU</span></div>
+    <div class="status-pill"><div class="dot" id="power-dot"></div><span id="batt-pct">---%</span></div>
+    <div class="sep"></div>
+    <div id="latency-badge">--- ms</div>
+    <div class="status-pill" id="mode-badge">MANUAL</div>
+  </header>
+
+  <!-- LEFT PANEL -->
+  <aside id="left-panel" class="panel">
+    <div class="card">
+      <div class="card-title">Drive Control</div>
+      <div class="dpad">
+        <div class="dpad-empty"></div>
+        <button class="dpad-btn" id="btn-fwd"   data-cmd="forward">&#9650;</button>
+        <div class="dpad-empty"></div>
+        <button class="dpad-btn" id="btn-left"  data-cmd="left">&#9664;</button>
+        <button class="dpad-btn stop-btn" id="btn-stop" data-cmd="stop">STOP</button>
+        <button class="dpad-btn" id="btn-right" data-cmd="right">&#9654;</button>
+        <div class="dpad-empty"></div>
+        <button class="dpad-btn" id="btn-bwd"   data-cmd="backward">&#9660;</button>
+        <div class="dpad-empty"></div>
+      </div>
+      <div class="speed-row">
+        <label>SPEED</label>
+        <input type="range" id="speed-slider" min="50" max="255" value="200" />
+        <span id="speed-val">200</span>
+      </div>
     </div>
 
-    <!-- Main Container -->
-    <div class="main-container">
-        <!-- Left Control Panel -->
-        <div class="control-panel left-panel">
-            <div class="panel-header">MOVEMENT</div>
-            
-            <!-- D-Pad Controls -->
-            <div class="dpad-container">
-                <div class="dpad">
-                    <button class="dpad-btn dpad-up" onmousedown="sendCommand('motor/forward')" onmouseup="sendCommand('motor/stop')" ontouchstart="sendCommand('motor/forward')" ontouchend="sendCommand('motor/stop')">
-                        <span>▲</span>
-                    </button>
-                    <button class="dpad-btn dpad-left" onmousedown="sendCommand('motor/left')" onmouseup="sendCommand('motor/stop')" ontouchstart="sendCommand('motor/left')" ontouchend="sendCommand('motor/stop')">
-                        <span>◄</span>
-                    </button>
-                    <button class="dpad-btn dpad-center" onclick="sendCommand('motor/stop')">
-                        <span>■</span>
-                    </button>
-                    <button class="dpad-btn dpad-right" onmousedown="sendCommand('motor/right')" onmouseup="sendCommand('motor/stop')" ontouchstart="sendCommand('motor/right')" ontouchend="sendCommand('motor/stop')">
-                        <span>►</span>
-                    </button>
-                    <button class="dpad-btn dpad-down" onmousedown="sendCommand('motor/backward')" onmouseup="sendCommand('motor/stop')" ontouchstart="sendCommand('motor/backward')" ontouchend="sendCommand('motor/stop')">
-                        <span>▼</span>
-                    </button>
-                </div>
-            </div>
-            
-            <!-- Speed Control -->
-            <div class="speed-control">
-                <div class="control-label">SPEED</div>
-                <input type="range" id="speed-slider" min="50" max="255" value="200" oninput="updateSpeed(this.value)">
-                <div class="speed-display" id="speed-display">200</div>
-            </div>
-            
-            <!-- Mode Controls -->
-            <div class="mode-controls">
-                <button class="mode-btn" id="auto-btn" onclick="toggleAutonomous()">
-                    <span class="mode-icon">🤖</span>
-                    <span class="mode-label">AUTO</span>
-                </button>
-                <button class="mode-btn" id="ml-btn" onclick="toggleML()">
-                    <span class="mode-icon">👁</span>
-                    <span class="mode-label">ML</span>
-                </button>
-            </div>
-        </div>
-
-        <!-- Center Video Feed -->
-        <div class="video-container">
-            <img src="/video_feed" class="video-feed" id="video-feed" alt="Camera Feed">
-            
-            <!-- HUD Overlay -->
-            <div class="hud-overlay" id="hud-overlay">
-                <!-- Crosshair -->
-                <div class="crosshair"></div>
-                
-                <!-- Compass -->
-                <div class="compass">
-                    <div class="compass-needle"></div>
-                    <span class="compass-label">N</span>
-                </div>
-                
-                <!-- Distance Radar -->
-                <div class="distance-radar">
-                    <div class="radar-circle"></div>
-                    <div class="radar-sweep"></div>
-                    <div class="radar-blip" id="radar-blip"></div>
-                    <div class="distance-value" id="distance-display">
-                        <span class="distance-number">--</span>
-                        <span class="distance-unit">cm</span>
-                    </div>
-                </div>
-                
-                <!-- Status Indicators -->
-                <div class="hud-status">
-                    <div class="hud-item">
-                        <span class="hud-label">SPD</span>
-                        <span class="hud-value" id="hud-speed">200</span>
-                    </div>
-                    <div class="hud-item">
-                        <span class="hud-label">DIR</span>
-                        <span class="hud-value" id="hud-direction">STOP</span>
-                    </div>
-                </div>
-                
-                <!-- Scan Lines Effect -->
-                <div class="scanlines"></div>
-            </div>
-        </div>
-
-        <!-- Right Control Panel -->
-        <div class="control-panel right-panel">
-            <div class="panel-header">SERVOS</div>
-            
-            <!-- Servo Sliders -->
-            <div class="servo-controls">
-                <div class="servo-slider">
-                    <div class="servo-label">S1</div>
-                    <input type="range" class="vertical-slider" id="servo1" min="0" max="180" value="90" orient="vertical" oninput="updateServo(1, this.value)">
-                    <div class="servo-value" id="servo1-value">90°</div>
-                </div>
-                
-                <div class="servo-slider">
-                    <div class="servo-label">S2</div>
-                    <input type="range" class="vertical-slider" id="servo2" min="0" max="180" value="90" orient="vertical" oninput="updateServo(2, this.value)">
-                    <div class="servo-value" id="servo2-value">90°</div>
-                </div>
-                
-                <div class="servo-slider">
-                    <div class="servo-label">S3</div>
-                    <input type="range" class="vertical-slider" id="servo3" min="0" max="180" value="90" orient="vertical" oninput="updateServo(3, this.value)">
-                    <div class="servo-value" id="servo3-value">90°</div>
-                </div>
-                
-                <div class="servo-slider">
-                    <div class="servo-label">S4</div>
-                    <input type="range" class="vertical-slider" id="servo4" min="0" max="180" value="90" orient="vertical" oninput="updateServo(4, this.value)">
-                    <div class="servo-value" id="servo4-value">90°</div>
-                </div>
-            </div>
-            
-            <!-- Servo Presets -->
-            <div class="preset-controls">
-                <div class="control-label">PRESETS</div>
-                <div class="preset-grid">
-                    <button class="preset-btn" onclick="loadPreset(0)">HOME</button>
-                    <button class="preset-btn" onclick="loadPreset(1)">SCAN</button>
-                    <button class="preset-btn" onclick="loadPreset(2)">GRIP</button>
-                    <button class="preset-btn" onclick="loadPreset(3)">LEFT</button>
-                    <button class="preset-btn" onclick="loadPreset(4)">RIGHT</button>
-                    <button class="preset-btn" onclick="loadPreset(5)">UP</button>
-                    <button class="preset-btn" onclick="loadPreset(6)">DOWN</button>
-                    <button class="preset-btn" onclick="centerServos()">CENTER</button>
-                </div>
-            </div>
-        </div>
+    <div class="card">
+      <div class="card-title">Servo Control</div>
+      <div class="servo-row"><label>S1 PAN</label><input type="range" class="servo-input" data-servo="1" min="0" max="180" value="90" /><span class="servo-val">90°</span></div>
+      <div class="servo-row"><label>S2 TILT</label><input type="range" class="servo-input" data-servo="2" min="0" max="180" value="90" /><span class="servo-val">90°</span></div>
+      <div class="servo-row"><label>S3 CAM</label><input type="range" class="servo-input" data-servo="3" min="0" max="180" value="90" /><span class="servo-val">90°</span></div>
+      <div class="servo-row"><label>S4 AUX</label><input type="range" class="servo-input" data-servo="4" min="0" max="180" value="90" /><span class="servo-val">90°</span></div>
+      <div class="row" style="margin-top:8px">
+        <button class="full-btn" onclick="servoCenter()">CENTER ALL</button>
+        <button class="full-btn" onclick="servoScan()">SCAN</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="full-btn" onclick="servoPreset(1)">P1</button>
+        <button class="full-btn" onclick="servoPreset(2)">P2</button>
+        <button class="full-btn" onclick="servoPreset(3)">P3</button>
+        <button class="full-btn" onclick="servoPreset(4)">P4</button>
+      </div>
     </div>
 
-    <!-- Bottom Telemetry Panel (Collapsible) -->
-    <div class="telemetry-panel" id="telemetry-panel">
-        <div class="telemetry-header" onclick="toggleTelemetry()">
-            <span>TELEMETRY DATA</span>
-            <span class="toggle-icon" id="telemetry-toggle">▲</span>
-        </div>
-        <div class="telemetry-content" id="telemetry-content">
-            <div class="telemetry-grid">
-                <div class="telemetry-card">
-                    <div class="telemetry-title">SYSTEM STATUS</div>
-                    <div class="telemetry-data">
-                        <div class="data-row">
-                            <span>Uptime:</span>
-                            <span id="uptime">00:00:00</span>
-                        </div>
-                        <div class="data-row">
-                            <span>Commands:</span>
-                            <span id="command-count">0</span>
-                        </div>
-                        <div class="data-row">
-                            <span>Mode:</span>
-                            <span id="current-mode">MANUAL</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="telemetry-card">
-                    <div class="telemetry-title">DISTANCE STATS</div>
-                    <div class="telemetry-data">
-                        <div class="data-row">
-                            <span>Current:</span>
-                            <span id="dist-current">-- cm</span>
-                        </div>
-                        <div class="data-row">
-                            <span>Min:</span>
-                            <span id="dist-min">-- cm</span>
-                        </div>
-                        <div class="data-row">
-                            <span>Max:</span>
-                            <span id="dist-max">-- cm</span>
-                        </div>
-                        <div class="data-row">
-                            <span>Avg:</span>
-                            <span id="dist-avg">-- cm</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="telemetry-card">
-                    <div class="telemetry-title">ACTIONS</div>
-                    <div class="telemetry-actions">
-                        <button class="action-btn" onclick="exportTelemetry()">EXPORT CSV</button>
-                        <button class="action-btn" onclick="refreshStats()">REFRESH</button>
-                    </div>
-                </div>
-            </div>
-        </div>
+    <div class="card">
+      <div class="card-title">Lighting</div>
+      <div class="led-modes">
+        <button class="led-mode-btn" onclick="setLedMode('IDLE')">IDLE</button>
+        <button class="led-mode-btn" onclick="setLedMode('NIGHT')">NIGHT</button>
+        <button class="led-mode-btn" onclick="setLedMode('WARN')">WARN</button>
+        <button class="led-mode-btn" onclick="setLedMode('ML')">ML</button>
+        <button class="led-mode-btn" onclick="setLedMode('OFF')">OFF</button>
+      </div>
+      <div class="row" style="align-items:center;gap:8px;">
+        <label style="font-family:var(--font-mono);font-size:10px;color:var(--text-md)">CUSTOM</label>
+        <input type="color" id="led-color-input" value="#00ff88" onchange="setLedColor(this.value)" />
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="full-btn toggle-btn" id="night-toggle" onclick="toggleNight()">&#9790; NIGHT MODE</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- CENTER PANEL -->
+  <main id="center-panel">
+    <div id="video-container">
+      <img id="video-feed" src="/video_feed" alt="Camera Feed" />
+      <div id="crosshair"></div>
+      <div class="hud-badge" id="hud-mode">MANUAL</div>
+      <div class="hud-badge" id="hud-fps">-- FPS</div>
+      <div class="hud-badge" id="hud-dist">FRONT: -- cm</div>
+      <div class="hud-badge" id="hud-rec">&#9679; REC</div>
+    </div>
+  </main>
+
+  <!-- RIGHT PANEL -->
+  <aside id="right-panel" class="panel">
+    <div class="card">
+      <div class="card-title">Autonomous Mode</div>
+      <div class="auto-mode-row">
+        <button class="auto-mode-btn selected" id="auto-explore" onclick="selectAutoMode('EXPLORE')">EXPLORE</button>
+        <button class="auto-mode-btn" id="auto-patrol" onclick="selectAutoMode('PATROL')">PATROL</button>
+      </div>
+      <div class="row">
+        <button class="full-btn primary" id="auto-start-btn" onclick="toggleAuto()">START AUTO</button>
+      </div>
     </div>
 
-    <!-- Settings Modal -->
-    <div class="modal" id="settings-modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>SETTINGS</h2>
-                <button class="close-btn" onclick="toggleSettings()">×</button>
-            </div>
-            <div class="modal-body">
-                <div class="setting-group">
-                    <label>HUD Overlay</label>
-                    <button class="toggle-btn" id="hud-toggle-btn" onclick="toggleHUD()">ON</button>
-                </div>
-                <div class="setting-group">
-                    <label>Keyboard Controls</label>
-                    <button class="toggle-btn" id="keyboard-toggle-btn" onclick="toggleKeyboard()">ON</button>
-                </div>
-                <div class="setting-group">
-                    <label>Video Quality</label>
-                    <select id="quality-select">
-                        <option value="low">Low (320p)</option>
-                        <option value="medium" selected>Medium (480p)</option>
-                        <option value="high">High (720p)</option>
-                    </select>
-                </div>
-            </div>
-        </div>
+    <div class="card">
+      <div class="card-title">Quick Actions</div>
+      <div class="toggle-grid">
+        <button class="toggle-btn" id="ml-toggle" onclick="toggleML()">ML DETECT</button>
+        <button class="toggle-btn" id="rec-toggle" onclick="toggleRecording()">&#9679; RECORD</button>
+        <button class="toggle-btn" id="esp32-toggle" onclick="toggleESP32()">REAR CAM</button>
+        <button class="toggle-btn danger-active" onclick="emergencyStop()">E-STOP</button>
+      </div>
     </div>
 
-    <!-- JavaScript files -->
-    <script src="/static/js/controls.js"></script>
-    <script src="/static/js/keyboard.js"></script>
-    <script src="/static/js/telemetry.js"></script>
+    <div class="card">
+      <div class="card-title">Proximity Radar</div>
+      <canvas id="radar-canvas" width="252" height="130"></canvas>
+    </div>
+
+    <div class="card">
+      <div class="card-title">IMU Orientation</div>
+      <div class="imu-grid">
+        <div class="imu-cell"><div class="label">PITCH</div><div class="value" id="imu-pitch">0.0°</div></div>
+        <div class="imu-cell"><div class="label">ROLL</div><div class="value" id="imu-roll">0.0°</div></div>
+        <div class="imu-cell"><div class="label">ACC X</div><div class="value" id="imu-ax">0.00</div></div>
+        <div class="imu-cell"><div class="label">ACC Y</div><div class="value" id="imu-ay">0.00</div></div>
+      </div>
+      <div id="flip-alert" style="display:none;margin-top:8px;padding:6px;background:rgba(255,77,77,.15);border:1px solid var(--danger);border-radius:var(--radius);font-family:var(--font-mono);font-size:10px;color:var(--danger);text-align:center;">
+        &#9888; FLIP DETECTED — MOTORS HALTED
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Power System</div>
+      <div class="power-bar-wrap"><div class="power-bar" id="power-bar" style="width:0%"></div></div>
+      <div class="power-stats">
+        <div class="power-stat"><div class="ps-label">VOLTAGE</div><div class="ps-val" id="pwr-volt">--V</div></div>
+        <div class="power-stat"><div class="ps-label">CURRENT</div><div class="ps-val" id="pwr-curr">--mA</div></div>
+        <div class="power-stat"><div class="ps-label">POWER</div><div class="ps-val" id="pwr-watt">--mW</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">System Performance</div>
+      <div class="sparkline-row"><span class="sl-label">CPU</span><canvas id="cpu-chart"></canvas><span class="sl-val" id="cpu-val">--%</span></div>
+      <div class="sparkline-row"><span class="sl-label">TEMP</span><canvas id="temp-chart"></canvas><span class="sl-val" id="temp-val">--°C</span></div>
+      <div class="sparkline-row"><span class="sl-label">MEM</span><canvas id="mem-chart"></canvas><span class="sl-val" id="mem-val">--%</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Connections</div>
+      <div class="conn-row"><span class="conn-label">Motor Arduino</span><span class="conn-badge fail" id="conn-motor">OFFLINE</span></div>
+      <div class="conn-row"><span class="conn-label">Servo Arduino</span><span class="conn-badge fail" id="conn-servo">OFFLINE</span></div>
+      <div class="conn-row"><span class="conn-label">INA219 Power</span><span class="conn-badge warn" id="conn-power">UNKNOWN</span></div>
+      <div class="conn-row"><span class="conn-label">MPU-6050 IMU</span><span class="conn-badge warn" id="conn-imu">UNKNOWN</span></div>
+      <div class="conn-row"><span class="conn-label">Pi Camera</span><span class="conn-badge warn" id="conn-camera">UNKNOWN</span></div>
+      <div class="conn-row"><span class="conn-label">WS2812B LED</span><span class="conn-badge warn" id="conn-led">UNKNOWN</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Event Log</div>
+      <div id="event-log"></div>
+    </div>
+  </aside>
+</div>
+
+<div id="alert-container"></div>
+
+<script>
+const state = { autonomous:false, autoMode:'EXPLORE', recording:false, mlEnabled:false, nightMode:false, esp32Active:false, pingStart:0 };
+const socket = io({ transports:['websocket'] });
+
+socket.on('connect',    () => { setWsStatus(true);  pingLatency(); });
+socket.on('disconnect', () => setWsStatus(false));
+socket.on('telemetry',  (d) => updateAllPanels(d));
+socket.on('alert',      (d) => { showToast(d.level, d.source, d.message); appendLog(d.level, d.source, d.message); });
+socket.on('pong_latency', () => { document.getElementById('latency-badge').textContent = (Date.now()-state.pingStart)+' ms'; setTimeout(pingLatency,3000); });
+
+function pingLatency() { state.pingStart = Date.now(); socket.emit('ping_latency', {}); }
+function setWsStatus(on) {
+  document.getElementById('ws-dot').className   = 'dot '+(on?'on':'err');
+  document.getElementById('ws-label').textContent = on?'ONLINE':'OFFLINE';
+}
+
+function updateAllPanels(d) {
+  if (d.connections) {
+    setConn('conn-motor', d.connections.motor_arduino, 'motor-dot');
+    setConn('conn-servo', d.connections.servo_arduino, 'servo-dot');
+  }
+  if (d.power)      updatePower(d.power);
+  if (d.imu)        updateIMU(d.imu);
+  if (d.autonomous) { updateAutoStatus(d.autonomous); updateRadar(d.autonomous); }
+  if (d.system)     updateSysmon(d.system);
+  if (d.led)        setConn('conn-led', d.led.available, null);
+  if (d.camera)     setConn('conn-camera', d.camera.available, null);
+  if (d.power)      setConn('conn-power', d.power.available, null);
+  if (d.imu)        setConn('conn-imu', d.imu.available, 'imu-dot');
+  if (d.autonomous) document.getElementById('hud-dist').textContent = `F:${d.autonomous.dist_front}cm L:${d.autonomous.dist_left}cm R:${d.autonomous.dist_right}cm`;
+  const mode = d.autonomous?.running ? d.autonomous.mode : 'MANUAL';
+  document.getElementById('hud-mode').textContent = mode;
+  document.getElementById('mode-badge').textContent = mode;
+  document.getElementById('hud-rec').classList.toggle('active', !!d.recording);
+}
+
+function setConn(id, ok, dotId) {
+  const el = document.getElementById(id); if (!el) return;
+  el.className = 'conn-badge '+(ok?'ok':'fail');
+  el.textContent = ok?'ONLINE':'OFFLINE';
+  if (dotId) { const d = document.getElementById(dotId); if (d) d.className = 'dot '+(ok?'on':'err'); }
+}
+
+function updatePower(p) {
+  const pct = p.battery_percent||0;
+  const bar = document.getElementById('power-bar');
+  bar.style.width = pct+'%';
+  bar.style.background = pct<15?'var(--danger)':pct<30?'var(--warn)':'var(--accent)';
+  document.getElementById('batt-pct').textContent = pct.toFixed(0)+'%';
+  document.getElementById('pwr-volt').textContent = (p.voltage_v||0).toFixed(2)+'V';
+  document.getElementById('pwr-curr').textContent = (p.current_ma||0).toFixed(0)+'mA';
+  document.getElementById('pwr-watt').textContent = (p.power_mw||0).toFixed(0)+'mW';
+  document.getElementById('power-dot').className = 'dot '+(pct<15?'err':pct<30?'warn':'on');
+}
+
+function updateIMU(imu) {
+  const pitch = (imu.pitch||0).toFixed(1), roll = (imu.roll||0).toFixed(1);
+  const pEl = document.getElementById('imu-pitch'), rEl = document.getElementById('imu-roll');
+  pEl.textContent = pitch+'°'; rEl.textContent = roll+'°';
+  document.getElementById('imu-ax').textContent = (imu.acc_x||0).toFixed(2);
+  document.getElementById('imu-ay').textContent = (imu.acc_y||0).toFixed(2);
+  const flipped = imu.is_flipped;
+  document.getElementById('flip-alert').style.display = flipped?'block':'none';
+  pEl.className = 'value'+(flipped?' danger':Math.abs(pitch)>25?' warn':'');
+  rEl.className = 'value'+(flipped?' danger':Math.abs(roll)>25?' warn':'');
+}
+
+function updateAutoStatus(auto) {
+  const btn = document.getElementById('auto-start-btn');
+  state.autonomous = auto.running;
+  btn.textContent = auto.running?'STOP AUTO':'START AUTO';
+  btn.className = auto.running?'full-btn danger':'full-btn primary';
+}
+
+const charts = {};
+function getOrCreateChart(id, color) {
+  if (charts[id]) return charts[id];
+  const ctx = document.getElementById(id).getContext('2d');
+  charts[id] = new Chart(ctx, { type:'line', data:{ labels:[], datasets:[{ data:[], borderColor:color, borderWidth:1.5, fill:true, backgroundColor:color+'22', pointRadius:0, tension:0.3 }] }, options:{ animation:false, responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{display:false}, y:{display:false,min:0,max:100} } } });
+  return charts[id];
+}
+function updateSysmon(s) {
+  document.getElementById('cpu-val').textContent  = (s.cpu_percent||0).toFixed(0)+'%';
+  document.getElementById('temp-val').textContent = (s.cpu_temp||0).toFixed(1)+'°C';
+  document.getElementById('mem-val').textContent  = (s.mem_percent||0).toFixed(0)+'%';
+  pushChart('cpu-chart',  s.cpu_history||[],  '#58a6ff');
+  pushChart('temp-chart', s.temp_history||[], '#f0a500');
+  pushChart('mem-chart',  s.mem_history||[],  '#a371f7');
+}
+function pushChart(id, history, color) {
+  const c = getOrCreateChart(id, color), last = history.slice(-60);
+  c.data.labels = last.map((_,i)=>i); c.data.datasets[0].data = last; c.update('none');
+}
+
+const rctx = document.getElementById('radar-canvas').getContext('2d');
+function updateRadar(auto) {
+  const W=252, H=130, cx=W/2, cy=H-10, maxR=H-20, maxDist=150;
+  rctx.clearRect(0,0,W,H);
+  rctx.fillStyle='#0a0c0f'; rctx.fillRect(0,0,W,H);
+  for (let r=maxR/3; r<=maxR; r+=maxR/3) { rctx.beginPath(); rctx.arc(cx,cy,r,Math.PI,0); rctx.strokeStyle='rgba(0,229,160,.15)'; rctx.lineWidth=1; rctx.stroke(); }
+  for (let a=0; a<=180; a+=30) { const rad=a*Math.PI/180; rctx.beginPath(); rctx.moveTo(cx,cy); rctx.lineTo(cx-maxR*Math.cos(rad),cy-maxR*Math.sin(rad)); rctx.strokeStyle='rgba(0,229,160,.1)'; rctx.stroke(); }
+  [{ dist:auto.dist_front, angle:90, color:'#00e5a0' }, { dist:auto.dist_left, angle:150, color:'#58a6ff' }, { dist:auto.dist_right, angle:30, color:'#58a6ff' }].forEach(({dist,angle,color}) => {
+    if (!dist||dist<=0) return;
+    const r=(Math.min(dist,maxDist)/maxDist)*maxR, rad=angle*Math.PI/180, x=cx-r*Math.cos(rad), y=cy-r*Math.sin(rad);
+    rctx.beginPath(); rctx.moveTo(cx,cy); rctx.lineTo(x,y); rctx.strokeStyle=color+'55'; rctx.lineWidth=1; rctx.stroke();
+    rctx.beginPath(); rctx.arc(x,y,4,0,2*Math.PI); rctx.fillStyle=dist<20?'#ff4d4d':color; rctx.fill();
+    rctx.fillStyle=color; rctx.font='9px monospace'; rctx.fillText(dist+'cm',x+5,y-3);
+  });
+  rctx.beginPath(); rctx.arc(cx,cy,5,0,2*Math.PI); rctx.fillStyle='#00e5a0'; rctx.fill();
+}
+
+// Motor
+document.querySelectorAll('.dpad-btn[data-cmd]').forEach(btn => {
+  btn.addEventListener('mousedown', () => { sendMotor(btn.dataset.cmd); btn.classList.add('pressed'); });
+  btn.addEventListener('mouseup',   () => btn.classList.remove('pressed'));
+  btn.addEventListener('mouseleave',() => btn.classList.remove('pressed'));
+  btn.addEventListener('touchstart', (e) => { e.preventDefault(); sendMotor(btn.dataset.cmd); btn.classList.add('pressed'); });
+  btn.addEventListener('touchend',   (e) => { e.preventDefault(); sendMotor('stop'); btn.classList.remove('pressed'); });
+});
+function sendMotor(dir) { fetch(`/api/motor/${dir}`, { method:'POST' }).catch(()=>{}); }
+
+const speedSlider = document.getElementById('speed-slider');
+let speedDebounce;
+speedSlider.addEventListener('input', () => {
+  document.getElementById('speed-val').textContent = speedSlider.value;
+  clearTimeout(speedDebounce);
+  speedDebounce = setTimeout(() => fetch('/api/motor/speed', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({speed:parseInt(speedSlider.value)}) }), 150);
+});
+
+const keyMap = { 'w':'forward','arrowup':'forward','s':'backward','arrowdown':'backward','a':'left','arrowleft':'left','d':'right','arrowright':'right',' ':'stop' };
+const heldKeys = new Set();
+document.addEventListener('keydown', (e) => {
+  const cmd = keyMap[e.key.toLowerCase()];
+  if (cmd && !heldKeys.has(cmd)) { heldKeys.add(cmd); sendMotor(cmd); const m={forward:'btn-fwd',backward:'btn-bwd',left:'btn-left',right:'btn-right',stop:'btn-stop'}; document.getElementById(m[cmd])?.classList.add('pressed'); }
+});
+document.addEventListener('keyup', (e) => {
+  const cmd = keyMap[e.key.toLowerCase()];
+  if (cmd) { heldKeys.delete(cmd); sendMotor('stop'); document.querySelectorAll('.dpad-btn').forEach(b=>b.classList.remove('pressed')); }
+});
+
+// Servo
+document.querySelectorAll('.servo-input').forEach(input => {
+  input.addEventListener('input', () => {
+    input.nextElementSibling.textContent = input.value+'°';
+    clearTimeout(input._t);
+    input._t = setTimeout(() => fetch('/api/servo/set', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({servo:parseInt(input.dataset.servo),angle:parseInt(input.value)}) }), 80);
+  });
+});
+function servoCenter() { fetch('/api/servo/center',{method:'POST'}); document.querySelectorAll('.servo-input').forEach(i=>{i.value=90;i.nextElementSibling.textContent='90°';}); }
+function servoScan()   { fetch('/api/servo/scan',  {method:'POST'}); }
+function servoPreset(n){ fetch('/api/servo/preset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({preset:n})}); }
+
+// Autonomous
+function selectAutoMode(mode) { state.autoMode=mode; document.getElementById('auto-explore').classList.toggle('selected',mode==='EXPLORE'); document.getElementById('auto-patrol').classList.toggle('selected',mode==='PATROL'); }
+function toggleAuto() {
+  if (state.autonomous) fetch('/api/autonomous/stop',{method:'POST'});
+  else fetch('/api/autonomous/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:state.autoMode})});
+}
+function emergencyStop() { fetch('/api/motor/stop',{method:'POST'}); if(state.autonomous) fetch('/api/autonomous/stop',{method:'POST'}); showToast('WARN','user','Emergency stop triggered'); }
+
+// ML
+function toggleML() { state.mlEnabled=!state.mlEnabled; fetch('/api/ml/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enable:state.mlEnabled})}); document.getElementById('ml-toggle').classList.toggle('active',state.mlEnabled); }
+
+// Recording
+function toggleRecording() {
+  const btn = document.getElementById('rec-toggle');
+  if (state.recording) { fetch('/api/recording/stop',{method:'POST'}); state.recording=false; btn.classList.remove('warn-active'); btn.textContent='⬤ RECORD'; }
+  else { fetch('/api/recording/start',{method:'POST'}); state.recording=true; btn.classList.add('warn-active'); btn.textContent='⏹ STOP REC'; }
+}
+
+// LED
+function setLedMode(mode) { fetch('/api/led/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})}); document.querySelectorAll('.led-mode-btn').forEach(b=>b.classList.toggle('active',b.textContent===mode)); }
+function setLedColor(hex) { const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16); fetch('/api/led/color',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({r,g,b})}); }
+function toggleNight() { fetch('/api/led/night',{method:'POST'}).then(r=>r.json()).then(d=>{state.nightMode=d.night_mode;document.getElementById('night-toggle').classList.toggle('active',state.nightMode);}); }
+
+// ESP32
+function toggleESP32() { state.esp32Active=!state.esp32Active; document.getElementById('video-feed').src=state.esp32Active?'/esp32_feed':'/video_feed'; document.getElementById('esp32-toggle').classList.toggle('active',state.esp32Active); }
+
+// Toasts & Log
+function showToast(level, source, message) {
+  const c=document.getElementById('alert-container'), t=document.createElement('div');
+  t.className=`alert-toast ${level}`; t.innerHTML=`<strong>[${source.toUpperCase()}]</strong> ${message}`;
+  c.appendChild(t); setTimeout(()=>t.remove(),5000);
+}
+function appendLog(level, source, message) {
+  const log=document.getElementById('event-log'), ts=new Date().toTimeString().slice(0,8), e=document.createElement('div');
+  e.className=`log-entry ${level}`; e.innerHTML=`<span class="ts">${ts}</span> <span class="src">[${source}]</span> <span class="msg">${message}</span>`;
+  log.prepend(e); while(log.children.length>80) log.lastChild.remove();
+}
+
+// Init
+fetch('/api/status').then(r=>r.json()).then(d=>{ if(d.connections){setConn('conn-motor',d.connections.motor_arduino,'motor-dot');setConn('conn-servo',d.connections.servo_arduino,'servo-dot');} if(d.power)updatePower(d.power); if(d.imu)updateIMU(d.imu); if(d.system)updateSysmon(d.system); }).catch(()=>appendLog('WARN','ui','Could not fetch initial status'));
+fetch('/api/events?n=20').then(r=>r.json()).then(d=>(d.events||[]).reverse().forEach(e=>appendLog(e.level,e.source,e.message)));
+</script>
 </body>
 </html>

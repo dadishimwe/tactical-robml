@@ -1,58 +1,29 @@
-# ============================================================================
-# ROBOT CONTROL SYSTEM - PYTHON DEPENDENCIES
-# ============================================================================
-
-# Core Flask application
+# Core Web Framework
 Flask==3.0.0
-flask-socketio==5.3.5
-python-socketio==5.10.0
+Flask-SocketIO==5.3.6
 python-engineio==4.8.0
-eventlet==0.33.3
+python-socketio==5.10.0
+gevent==23.9.1
+gevent-websocket==0.10.1
+Werkzeug==3.0.1
 
-# Serial communication
+# Hardware Communication & Drivers
 pyserial==3.5
+smbus-cffi==0.5.1
+rpi-lgpio==0.4
+RPi.GPIO==0.7.1
+adafruit-circuitpython-ina219==3.3.10
+# Note: MPU6050 library is included in the `modules` directory
+rpi-ws281x==5.0.0
 
-# OpenCV for image processing (use system package instead)
-# opencv-python==4.8.1.78
+# System & Utilities
+psutil==5.9.5
+numpy==1.26.2
 
-# Basic utilities
-numpy==1.24.3
-Pillow==10.1.0
+# Computer Vision & ML
+# Install opencv via apt: sudo apt-get install python3-opencv
+# opencv-python-headless==4.8.1.78
+ultralytics==8.0.200
 
-# Optional: ML/AI dependencies (install only if using ML features)
-# Uncomment the following lines to enable ML object detection:
-# torch==2.1.0
-# torchvision==0.16.0
-# ultralytics==8.0.200  # YOLOv8
-
-# ============================================================================
-# IMPORTANT: Camera and OpenCV Installation
-# ============================================================================
-# 
-# DO NOT install picamera2 or opencv-python via pip in venv!
-# These require system packages. Use the system Python packages instead.
-#
-# Option 1: Use system site-packages (RECOMMENDED)
-# -------------------------------------------------
-# Instead of creating a venv, use system Python with --break-system-packages:
-#
-#   pip3 install --break-system-packages Flask flask-socketio pyserial
-#
-# Or create venv with system packages access:
-#
-#   python3 -m venv --system-site-packages venv
-#   source venv/bin/activate
-#   pip install Flask flask-socketio pyserial
-#
-# Option 2: Install system packages first
-# ----------------------------------------
-# Before creating venv, install system packages:
-#
-#   sudo apt-get update
-#   sudo apt-get install -y python3-opencv python3-picamera2
-#
-# Then create venv WITH system site packages:
-#
-#   python3 -m venv --system-site-packages venv
-#
-# ============================================================================
+# For PiCamera2 support, install system-wide:
+# sudo apt-get install -y python3-picamera2

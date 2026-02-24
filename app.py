@@ -1,391 +1,447 @@
 """
 ============================================================================
-ROBOT CONTROL SYSTEM - MAIN APPLICATION
+TACTICAL ROBOT CONTROL SYSTEM — MAIN APPLICATION
 ============================================================================
+Flask + Flask-SocketIO web application that orchestrates all hardware and
+system modules. Exposes a REST API for motor/servo/LED control and a
+WebSocket interface for real-time telemetry streaming.
 
-Flask web server for controlling robot via web interface.
+Run with:
+    source venv/bin/activate
+    python app.py
 
-Features:
-  - Live camera streaming (MJPEG)
-  - Motor control via serial
-  - Servo control via serial
-  - Video recording
-  - Distance logging
-  - Telemetry dashboard
-  - Autonomous modes
-  - ML object detection (optional)
-
-Author: Robot Control System
-Version: 1.0
+For production / headless deployment use the systemd service:
+    sudo systemctl start tactical-robot
 ============================================================================
 """
 
-from flask import Flask, render_template, Response, jsonify, request, send_from_directory
-from flask_socketio import SocketIO, emit
 import os
-import sys
+import time
+import logging
+import threading
 from datetime import datetime
+from functools import wraps
 
-# Import custom modules
-from modules.camera import CameraStream
-from modules.serial_comm import ArduinoController
-from modules.video_recorder import VideoRecorder
-from modules.telemetry import TelemetryLogger
-from modules.autonomous import AutonomousController
+from flask import (
+    Flask, render_template, Response, request, jsonify, abort
+)
+from flask_socketio import SocketIO, emit
 
-# ============================================================================
-# APPLICATION SETUP
-# ============================================================================
+import config
+from modules.hardware.serial_comm    import ArduinoController
+from modules.hardware.camera         import CameraManager
+from modules.hardware.power_monitor  import PowerMonitor
+from modules.hardware.imu            import IMUMonitor
+from modules.hardware.led_controller import LEDController
+from modules.system.autonomous       import AutonomousNavigator
+from modules.system.ml_detection     import MLDetector
+from modules.system.sysmon           import SystemMonitor
+from modules.system.telemetry        import TelemetryLogger
+
+# ── Logging Setup ────────────────────────────────────────────────────────────
+
+os.makedirs(config.LOG_DIR, exist_ok=True)
+os.makedirs(config.VIDEO_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(
+            os.path.join(config.LOG_DIR,
+                         f"app_{datetime.now().strftime('%Y%m%d')}.log")
+        ),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+# ── Flask & SocketIO ─────────────────────────────────────────────────────────
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'robot-control-secret-key-change-in-production'
-socketio = SocketIO(app, cors_allowed_origins="*")
+app.secret_key = config.SECRET_KEY
+socketio = SocketIO(
+    app,
+    async_mode="eventlet",
+    cors_allowed_origins="*",
+    logger=False,
+    engineio_logger=False,
+)
 
-# Initialize components
-camera = CameraStream()
-arduino = ArduinoController()
-recorder = VideoRecorder()
+# ── Hardware & System Initialisation ─────────────────────────────────────────
+
+logger.info("Initialising hardware modules…")
+arduino   = ArduinoController()
+camera    = CameraManager()
+power     = PowerMonitor()
+imu       = IMUMonitor(arduino)
+led       = LEDController()
+ml        = MLDetector()
+navigator = AutonomousNavigator(arduino, imu)
+sysmon    = SystemMonitor()
 telemetry = TelemetryLogger()
-autonomous = AutonomousController(arduino, camera)
 
-# Global state
-app_state = {
-    'recording': False,
-    'autonomous': False,
-    'ml_enabled': False,
-    'speed': 200,
-    'servo_positions': [90, 90, 90, 90]
-}
+# Inject ML overlay into camera pipeline
+camera.set_ml_overlay(ml.process_frame)
+
+logger.info("All modules initialised.")
+
+# ── Application State ─────────────────────────────────────────────────────────
+
+_recording_filename: str | None = None
+
+# ── Auth Decorator ────────────────────────────────────────────────────────────
+
+def require_api_key(f):
+    """Protect API endpoints with a simple bearer / header key check."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        key = request.headers.get("X-API-Key") or request.args.get("api_key")
+        if request.is_json:
+            key = key or (request.get_json(silent=True) or {}).get("api_key")
+        if key != config.API_KEY:
+            abort(401)
+        return f(*args, **kwargs)
+    return decorated
+
+# ── LED State Helper ──────────────────────────────────────────────────────────
+
+def _update_led_for_state():
+    """Derive the correct LED mode from current robot state."""
+    if camera.get_status()["recording"]:
+        led.set_mode("RECORD")
+    elif navigator.is_running():
+        led.set_mode("AUTO")
+    elif ml.get_status()["enabled"]:
+        led.set_mode("ML")
+    else:
+        led.set_mode("IDLE")
+
+# ── Telemetry Broadcast Thread ────────────────────────────────────────────────
+
+def _telemetry_broadcast():
+    """Push a full telemetry snapshot to all connected WebSocket clients."""
+    while True:
+        try:
+            snapshot = telemetry.build_snapshot(
+                motor_status      = arduino.get_motor_status(),
+                servo_status      = arduino.get_servo_status(),
+                autonomous_status = navigator.get_status(),
+                imu_status        = imu.get_status(),
+                power_status      = power.get_status(),
+                sysmon_status     = sysmon.get_status(),
+                camera_status     = camera.get_status(),
+                ml_status         = ml.get_status(),
+                led_status        = led.get_status(),
+                recording         = camera.get_status()["recording"],
+            )
+            socketio.emit("telemetry", snapshot)
+
+            # Targeted alerts
+            if power.alert_level == "CRITICAL":
+                led.set_mode("CRITICAL")
+                socketio.emit("alert", {
+                    "level": "CRITICAL", "source": "power",
+                    "message": f"Battery critical: {power.battery_percent:.0f}%"
+                })
+                telemetry.log_event("CRITICAL", "power",
+                                    f"Battery at {power.battery_percent:.0f}%")
+            elif power.alert_level == "WARN":
+                led.set_mode("WARN")
+                socketio.emit("alert", {
+                    "level": "WARN", "source": "power",
+                    "message": f"Battery low: {power.battery_percent:.0f}%"
+                })
+
+            if imu.is_flipped:
+                socketio.emit("alert", {
+                    "level": "CRITICAL", "source": "imu",
+                    "message": "Robot flipped — motors halted."
+                })
+                telemetry.log_event("CRITICAL", "imu", "Flip detected")
+
+            if sysmon.alert_level == "CRITICAL":
+                socketio.emit("alert", {
+                    "level": "WARN", "source": "sysmon",
+                    "message": f"CPU temp critical: {sysmon.cpu_temp}°C"
+                })
+
+        except Exception as exc:
+            logger.debug(f"[Telemetry] Broadcast error: {exc}")
+
+        time.sleep(config.TELEMETRY_INTERVAL)
+
+
+threading.Thread(
+    target=_telemetry_broadcast, daemon=True, name="TelemetryBroadcast"
+).start()
 
 # ============================================================================
-# WEB ROUTES
+# ROUTES — Pages
 # ============================================================================
 
-@app.route('/')
+@app.route("/")
 def index():
-    """Main control interface"""
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/video_feed')
+@app.route("/video_feed")
 def video_feed():
-    """MJPEG video streaming route"""
     return Response(
         camera.generate_frames(),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
+        mimetype="multipart/x-mixed-replace; boundary=frame",
     )
 
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    """Serve static files"""
-    return send_from_directory('static', filename)
+@app.route("/esp32_feed")
+def esp32_feed():
+    """Proxy ESP32-CAM stream if configured."""
+    esp_url = config.ESP32_CAM_URL
+    if not esp_url:
+        return jsonify({"error": "ESP32-CAM URL not configured"}), 404
+    import requests as req
+    def _proxy():
+        try:
+            with req.get(esp_url, stream=True, timeout=5) as r:
+                for chunk in r.iter_content(chunk_size=4096):
+                    yield chunk
+        except Exception as exc:
+            logger.warning(f"[ESP32] Stream error: {exc}")
+    return Response(_proxy(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 # ============================================================================
-# API ENDPOINTS - MOTOR CONTROL
+# ROUTES — Motor Control API
 # ============================================================================
 
-@app.route('/api/motor/forward', methods=['POST'])
-def motor_forward():
-    """Move robot forward"""
-    if app_state['autonomous']:
-        return jsonify({'error': 'Autonomous mode active'}), 400
-    
-    success = arduino.send_motor_command('F')
-    telemetry.log_command('motor', 'forward')
-    return jsonify({'success': success})
-
-@app.route('/api/motor/backward', methods=['POST'])
-def motor_backward():
-    """Move robot backward"""
-    if app_state['autonomous']:
-        return jsonify({'error': 'Autonomous mode active'}), 400
-    
-    success = arduino.send_motor_command('B')
-    telemetry.log_command('motor', 'backward')
-    return jsonify({'success': success})
-
-@app.route('/api/motor/left', methods=['POST'])
-def motor_left():
-    """Turn robot left"""
-    if app_state['autonomous']:
-        return jsonify({'error': 'Autonomous mode active'}), 400
-    
-    success = arduino.send_motor_command('L')
-    telemetry.log_command('motor', 'left')
-    return jsonify({'success': success})
-
-@app.route('/api/motor/right', methods=['POST'])
-def motor_right():
-    """Turn robot right"""
-    if app_state['autonomous']:
-        return jsonify({'error': 'Autonomous mode active'}), 400
-    
-    success = arduino.send_motor_command('R')
-    telemetry.log_command('motor', 'right')
-    return jsonify({'success': success})
-
-@app.route('/api/motor/stop', methods=['POST'])
-def motor_stop():
-    """Stop all motors"""
-    success = arduino.send_motor_command('S')
-    telemetry.log_command('motor', 'stop')
-    return jsonify({'success': success})
-
-@app.route('/api/motor/speed', methods=['POST'])
-def set_speed():
-    """Set motor speed (0-255)"""
-    data = request.get_json()
-    speed = data.get('speed', 200)
-    
-    if not 0 <= speed <= 255:
-        return jsonify({'error': 'Speed must be 0-255'}), 400
-    
-    success = arduino.send_motor_command(f'SP{speed}')
-    if success:
-        app_state['speed'] = speed
-        telemetry.log_command('motor', f'speed_{speed}')
-    
-    return jsonify({'success': success, 'speed': speed})
-
-# ============================================================================
-# API ENDPOINTS - SERVO CONTROL
-# ============================================================================
-
-@app.route('/api/servo/set', methods=['POST'])
-def set_servo():
-    """Set individual servo position"""
-    data = request.get_json()
-    servo_num = data.get('servo', 1)
-    angle = data.get('angle', 90)
-    
-    if not 1 <= servo_num <= 4:
-        return jsonify({'error': 'Servo must be 1-4'}), 400
-    
-    if not 0 <= angle <= 180:
-        return jsonify({'error': 'Angle must be 0-180'}), 400
-    
-    success = arduino.send_servo_command(f'S{servo_num}{angle:03d}')
-    if success:
-        app_state['servo_positions'][servo_num - 1] = angle
-        telemetry.log_command('servo', f's{servo_num}_{angle}')
-    
-    return jsonify({'success': success, 'servo': servo_num, 'angle': angle})
-
-@app.route('/api/servo/preset', methods=['POST'])
-def servo_preset():
-    """Load servo preset"""
-    data = request.get_json()
-    preset = data.get('preset', 0)
-    
-    if not 0 <= preset <= 6:
-        return jsonify({'error': 'Preset must be 0-6'}), 400
-    
-    success = arduino.send_servo_command(f'P{preset}')
-    telemetry.log_command('servo', f'preset_{preset}')
-    return jsonify({'success': success, 'preset': preset})
-
-@app.route('/api/servo/center', methods=['POST'])
-def servo_center():
-    """Center all servos"""
-    success = arduino.send_servo_command('C')
-    if success:
-        app_state['servo_positions'] = [90, 90, 90, 90]
-        telemetry.log_command('servo', 'center')
-    
-    return jsonify({'success': success})
-
-# ============================================================================
-# API ENDPOINTS - SENSOR & STATUS
-# ============================================================================
-
-@app.route('/api/distance', methods=['GET'])
-def get_distance():
-    """Get current distance reading"""
-    distance = arduino.get_distance()
-    telemetry.log_distance(distance)
-    return jsonify({'distance': distance})
-
-@app.route('/api/status', methods=['GET'])
-def get_status():
-    """Get system status"""
-    motor_status = arduino.get_motor_status()
-    servo_status = arduino.get_servo_status()
-    
+@app.route("/api/motor/<direction>", methods=["POST"])
+def motor_command(direction: str):
+    valid = {"forward", "backward", "left", "right", "stop", "slow"}
+    direction = direction.lower()
+    if direction not in valid:
+        return jsonify({"success": False, "error": "Invalid direction"}), 400
+    ok = arduino.send_motor_command(direction.upper())
+    if ok and direction not in ("stop", "slow"):
+        led.set_mode("MOVING")
+    elif direction == "stop":
+        _update_led_for_state()
+    telemetry.log_event("INFO", "motor", f"Command: {direction}")
     return jsonify({
-        'motor': motor_status,
-        'servo': servo_status,
-        'recording': app_state['recording'],
-        'autonomous': app_state['autonomous'],
-        'ml_enabled': app_state['ml_enabled'],
-        'speed': app_state['speed'],
-        'uptime': telemetry.get_uptime()
+        "success": ok,
+        "direction": direction,
+        "motor_connected": arduino.motor_connected,
     })
 
-# ============================================================================
-# API ENDPOINTS - VIDEO RECORDING
-# ============================================================================
-
-@app.route('/api/recording/start', methods=['POST'])
-def start_recording():
-    """Start video recording"""
-    if app_state['recording']:
-        return jsonify({'error': 'Already recording'}), 400
-    
-    filename = recorder.start_recording(camera)
-    app_state['recording'] = True
-    telemetry.log_command('recording', 'start')
-    
-    return jsonify({'success': True, 'filename': filename})
-
-@app.route('/api/recording/stop', methods=['POST'])
-def stop_recording():
-    """Stop video recording"""
-    if not app_state['recording']:
-        return jsonify({'error': 'Not recording'}), 400
-    
-    filename = recorder.stop_recording()
-    app_state['recording'] = False
-    telemetry.log_command('recording', 'stop')
-    
-    return jsonify({'success': True, 'filename': filename})
-
-@app.route('/api/recordings', methods=['GET'])
-def list_recordings():
-    """List all recorded videos"""
-    recordings = recorder.list_recordings()
-    return jsonify({'recordings': recordings})
+@app.route("/api/motor/speed", methods=["POST"])
+def set_speed():
+    data  = request.get_json(silent=True) or {}
+    speed = int(data.get("speed", config.DEFAULT_SPEED))
+    speed = max(config.MIN_SPEED, min(config.MAX_SPEED, speed))
+    ok    = arduino.send_motor_command(f"SPEED:{speed}")
+    return jsonify({"success": ok, "speed": speed})
 
 # ============================================================================
-# API ENDPOINTS - AUTONOMOUS MODE
+# ROUTES — Servo Control API
 # ============================================================================
 
-@app.route('/api/autonomous/start', methods=['POST'])
-def start_autonomous():
-    """Start autonomous obstacle avoidance"""
-    if app_state['autonomous']:
-        return jsonify({'error': 'Already in autonomous mode'}), 400
-    
-    success = autonomous.start()
-    if success:
-        app_state['autonomous'] = True
-        telemetry.log_command('autonomous', 'start')
-    
-    return jsonify({'success': success})
+@app.route("/api/servo/set", methods=["POST"])
+def servo_set():
+    data  = request.get_json(silent=True) or {}
+    servo = int(data.get("servo", 1))
+    angle = int(data.get("angle", config.SERVO_CENTER_ANGLE))
+    angle = max(config.SERVO_MIN_ANGLE, min(config.SERVO_MAX_ANGLE, angle))
+    ok    = arduino.send_servo_command(f"S{servo}:{angle}")
+    return jsonify({
+        "success": ok, "servo": servo, "angle": angle,
+        "servo_connected": arduino.servo_connected,
+    })
 
-@app.route('/api/autonomous/stop', methods=['POST'])
-def stop_autonomous():
-    """Stop autonomous mode"""
-    if not app_state['autonomous']:
-        return jsonify({'error': 'Not in autonomous mode'}), 400
-    
-    autonomous.stop()
-    app_state['autonomous'] = False
-    telemetry.log_command('autonomous', 'stop')
-    
-    return jsonify({'success': True})
+@app.route("/api/servo/center", methods=["POST"])
+def servo_center():
+    ok = arduino.send_servo_command("CENTER")
+    return jsonify({"success": ok})
+
+@app.route("/api/servo/preset", methods=["POST"])
+def servo_preset():
+    data   = request.get_json(silent=True) or {}
+    preset = int(data.get("preset", 1))
+    ok     = arduino.send_servo_command(f"PRESET:{preset}")
+    return jsonify({"success": ok, "preset": preset})
+
+@app.route("/api/servo/scan", methods=["POST"])
+def servo_scan():
+    """Trigger a 180° sweep scan on servo 1 (ultrasonic mount)."""
+    ok = arduino.send_servo_command("SCAN")
+    return jsonify({"success": ok})
 
 # ============================================================================
-# API ENDPOINTS - TELEMETRY
+# ROUTES — Autonomous Navigation API
 # ============================================================================
 
-@app.route('/api/telemetry/logs', methods=['GET'])
-def get_telemetry():
-    """Get telemetry logs"""
-    logs = telemetry.get_recent_logs(limit=100)
-    return jsonify({'logs': logs})
+@app.route("/api/autonomous/start", methods=["POST"])
+def autonomous_start():
+    data = request.get_json(silent=True) or {}
+    mode = data.get("mode", "EXPLORE")
+    ok   = navigator.start(mode)
+    if ok:
+        led.set_mode("AUTO")
+        telemetry.log_event("INFO", "autonomous", f"Started in {mode} mode")
+    return jsonify({"success": ok, "mode": mode})
 
-@app.route('/api/telemetry/export', methods=['GET'])
-def export_telemetry():
-    """Export telemetry as CSV"""
-    csv_file = telemetry.export_csv()
-    return send_from_directory('data/logs', csv_file, as_attachment=True)
+@app.route("/api/autonomous/stop", methods=["POST"])
+def autonomous_stop():
+    navigator.stop()
+    _update_led_for_state()
+    telemetry.log_event("INFO", "autonomous", "Stopped")
+    return jsonify({"success": True})
 
-@app.route('/api/telemetry/stats', methods=['GET'])
-def get_stats():
-    """Get telemetry statistics"""
-    stats = telemetry.get_statistics()
-    return jsonify(stats)
+@app.route("/api/autonomous/status", methods=["GET"])
+def autonomous_status_route():
+    return jsonify(navigator.get_status())
+
+# ============================================================================
+# ROUTES — ML Detection API
+# ============================================================================
+
+@app.route("/api/ml/toggle", methods=["POST"])
+def ml_toggle():
+    data   = request.get_json(silent=True) or {}
+    enable = data.get("enable", True)
+    if enable:
+        ok = ml.enable()
+    else:
+        ml.disable()
+        ok = True
+    _update_led_for_state()
+    status = ml.get_status()
+    return jsonify({"success": ok, "enabled": status["enabled"],
+                    "available": status["available"]})
+
+@app.route("/api/ml/detections", methods=["GET"])
+def ml_detections():
+    return jsonify(ml.get_status())
+
+# ============================================================================
+# ROUTES — LED Control API
+# ============================================================================
+
+@app.route("/api/led/mode", methods=["POST"])
+def led_mode():
+    data = request.get_json(silent=True) or {}
+    mode = data.get("mode", "IDLE").upper()
+    led.set_mode(mode)
+    return jsonify({"success": True, "mode": mode})
+
+@app.route("/api/led/color", methods=["POST"])
+def led_color():
+    data = request.get_json(silent=True) or {}
+    r = max(0, min(255, int(data.get("r", 0))))
+    g = max(0, min(255, int(data.get("g", 0))))
+    b = max(0, min(255, int(data.get("b", 0))))
+    led.set_custom_color(r, g, b)
+    return jsonify({"success": True, "color": [r, g, b]})
+
+@app.route("/api/led/night", methods=["POST"])
+def led_night():
+    state = led.toggle_night_mode()
+    return jsonify({"success": True, "night_mode": state})
+
+# ============================================================================
+# ROUTES — Recording API
+# ============================================================================
+
+@app.route("/api/recording/start", methods=["POST"])
+def recording_start():
+    global _recording_filename
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _recording_filename = os.path.join(config.VIDEO_DIR, f"mission_{ts}.mp4")
+    ok = camera.start_recording(_recording_filename)
+    if ok:
+        led.set_mode("RECORD")
+        telemetry.log_event("INFO", "recording", f"Started: {_recording_filename}")
+    return jsonify({"success": ok, "filename": _recording_filename})
+
+@app.route("/api/recording/stop", methods=["POST"])
+def recording_stop():
+    ok = camera.stop_recording()
+    _update_led_for_state()
+    telemetry.log_event("INFO", "recording", "Stopped")
+    return jsonify({"success": ok, "filename": _recording_filename})
+
+# ============================================================================
+# ROUTES — Sensor & Status API
+# ============================================================================
+
+@app.route("/api/sensors", methods=["GET"])
+def sensors():
+    return jsonify({
+        "distances": arduino.get_all_distances(),
+        "imu":       imu.get_status(),
+        "power":     power.get_status(),
+    })
+
+@app.route("/api/status", methods=["GET"])
+def status():
+    return jsonify({
+        "motor":       arduino.get_motor_status(),
+        "servo":       arduino.get_servo_status(),
+        "autonomous":  navigator.get_status(),
+        "imu":         imu.get_status(),
+        "power":       power.get_status(),
+        "system":      sysmon.get_status(),
+        "camera":      camera.get_status(),
+        "ml":          ml.get_status(),
+        "led":         led.get_status(),
+        "recording":   camera.get_status()["recording"],
+        "connections": {
+            "motor_arduino": arduino.motor_connected,
+            "servo_arduino": arduino.servo_connected,
+        },
+    })
+
+@app.route("/api/events", methods=["GET"])
+def events():
+    n = int(request.args.get("n", 100))
+    return jsonify({"events": telemetry.get_recent_events(n)})
 
 # ============================================================================
 # WEBSOCKET EVENTS
 # ============================================================================
 
-@socketio.on('connect')
-def handle_connect():
-    """Handle client connection"""
-    print(f'Client connected: {request.sid}')
-    emit('status', {'connected': True})
+@socketio.on("connect")
+def on_connect():
+    logger.info(f"[WS] Client connected: {request.sid}")
+    emit("connected", {"message": "Tactical Robot Control System online."})
 
-@socketio.on('disconnect')
-def handle_disconnect():
-    """Handle client disconnection"""
-    print(f'Client disconnected: {request.sid}')
+@socketio.on("disconnect")
+def on_disconnect():
+    logger.info(f"[WS] Client disconnected: {request.sid}")
 
-@socketio.on('request_update')
-def handle_update_request():
-    """Send real-time updates to client"""
-    distance = arduino.get_distance()
-    emit('distance_update', {'distance': distance})
-    emit('status_update', {
-        'recording': app_state['recording'],
-        'autonomous': app_state['autonomous'],
-        'speed': app_state['speed']
-    })
+@socketio.on("request_update")
+def on_request_update():
+    emit("status_update", arduino.get_motor_status())
+
+@socketio.on("ping_latency")
+def on_ping(data):
+    emit("pong_latency", data)
 
 # ============================================================================
-# ML INTEGRATION (OPTIONAL)
+# ENTRY POINT
 # ============================================================================
 
-try:
-    from modules.ml_detection import MLDetector
-    ml_detector = MLDetector(camera)
-    ML_AVAILABLE = True
-except ImportError:
-    ML_AVAILABLE = False
-    print("ML module not available. Install dependencies to enable.")
-
-@app.route('/api/ml/toggle', methods=['POST'])
-def toggle_ml():
-    """Toggle ML object detection"""
-    if not ML_AVAILABLE:
-        return jsonify({'error': 'ML module not available.'}), 400
-    
-    data = request.get_json()
-    enable = data.get('enable', False)
-    
-    if enable:
-        ml_detector.start()
-        app_state['ml_enabled'] = True
-    else:
-        ml_detector.stop()
-        app_state['ml_enabled'] = False
-    
-    telemetry.log_command('ml', 'enabled' if enable else 'disabled')
-    return jsonify({'success': True, 'enabled': app_state['ml_enabled']})
-
-@app.route('/api/ml/detections', methods=['GET'])
-def get_detections():
-    """Get current ML detections"""
-    if not ML_AVAILABLE or not app_state['ml_enabled']:
-        return jsonify({'detections': []})
-    
-    detections = ml_detector.get_detections()
-    return jsonify({'detections': detections})
-
-# ============================================================================
-# MAIN ENTRY POINT
-# ============================================================================
-
-if __name__ == '__main__':
-    print("=" * 70)
-    print("ROBOT CONTROL SYSTEM - Starting Server")
-    print("=" * 70)
-    print(f"Camera: {'Available' if camera.is_available() else 'Not Found'}")
-    print(f"Arduino Motor Controller: {'Connected' if arduino.motor_connected else 'Not Connected'}")
-    print(f"Arduino Servo Controller: {'Connected' if arduino.servo_connected else 'Not Connected'}")
-    print(f"ML Detection: {'Available' if ML_AVAILABLE else 'Not Available'}")
-    print("=" * 70)
-    print("Starting web server on http://0.0.0.0:5000")
-    print("=" * 70)
-    
-    # Run with SocketIO
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+if __name__ == "__main__":
+    logger.info(
+        f"Starting Tactical Robot Control System on "
+        f"http://{config.APP_HOST}:{config.APP_PORT}"
+    )
+    try:
+        socketio.run(
+            app,
+            host=config.APP_HOST,
+            port=config.APP_PORT,
+            debug=config.APP_DEBUG,
+        )
+    finally:
+        logger.info("Shutting down…")
+        navigator.stop()
+        camera.cleanup()
+        led.cleanup()
+        arduino.close()
+        telemetry.close()

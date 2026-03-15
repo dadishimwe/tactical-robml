@@ -245,7 +245,9 @@ void setup() {
   Wire.begin();
   if (ina219.init()) {
     inaAvailable = true;
-    ina219.setBusRange(INA219_BUS_RANGE_16V);
+    ina219.setBusRange(INA219_BRNG_16);
+    ina219.setADCMode(INA219_BIT_MODE_12);
+    ina219.setMeasureMode(INA219_CONTINUOUS);
     ina219.setShuntSizeInOhms(0.1);
   }
 

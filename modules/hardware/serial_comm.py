@@ -169,6 +169,14 @@ class ArduinoController:
             return False
         try:
             with self._motor_lock:
+                # On STOP, clear any queued data so braking is immediate
+                if command == "STOP" and self.motor_serial:
+                    try:
+                        self.motor_serial.reset_input_buffer()
+                        self.motor_serial.reset_output_buffer()
+                    except Exception:
+                        # Older pyserial versions may not support these; ignore
+                        pass
                 self.motor_serial.write(f"{command}\n".encode())
                 self.motor_serial.flush()
             return True

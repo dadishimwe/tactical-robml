@@ -457,7 +457,17 @@ document.querySelectorAll('.dpad-btn[data-cmd]').forEach(btn => {
   btn.addEventListener('touchstart', (e) => { e.preventDefault(); sendMotor(btn.dataset.cmd); btn.classList.add('pressed'); });
   btn.addEventListener('touchend',   (e) => { e.preventDefault(); sendMotor('stop'); btn.classList.remove('pressed'); });
 });
-function sendMotor(dir) { fetch(`/api/motor/${dir}`, { method:'POST' }).catch(()=>{}); }
+let lastMotorCommandTs = 0;
+const MOTOR_THROTTLE_MS = 200;
+function sendMotor(dir) {
+  const now = Date.now();
+  // STOP should always go through immediately
+  if (dir !== 'stop' && now - lastMotorCommandTs < MOTOR_THROTTLE_MS) {
+    return;
+  }
+  lastMotorCommandTs = now;
+  fetch(`/api/motor/${dir}`, { method:'POST' }).catch(()=>{});
+}
 
 const speedSlider = document.getElementById('speed-slider');
 let speedDebounce;

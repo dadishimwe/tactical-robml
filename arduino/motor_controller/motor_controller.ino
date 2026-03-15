@@ -266,6 +266,15 @@ void loop() {
     char c = Serial.read();
     if (c == '\n') {
       inputBuffer.trim();
+      // Give STOP highest priority: clear any queued commands and stop immediately
+      if (inputBuffer == "STOP") {
+        while (Serial.available()) {
+          Serial.read();
+        }
+        motorStop();
+        inputBuffer = "";
+        return;
+      }
       if (inputBuffer.length() > 0) processCommand(inputBuffer);
       inputBuffer = "";
     } else {

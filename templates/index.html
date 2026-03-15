@@ -126,10 +126,10 @@
     .ps-val { font-family: var(--font-mono); font-size: 12px; color: var(--text-hi); margin-top: 1px; }
 
     /* Sparklines */
-    .sparkline-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .sparkline-row { display: flex; align-items: center; gap: 4px; margin-bottom: 5px; }
     .sl-label { font-family: var(--font-mono); font-size: 9px; color: var(--text-md); width: 28px; }
     .sparkline-row canvas { flex: 1; height: 28px !important; }
-    .sl-val { font-family: var(--font-mono); font-size: 10px; color: var(--text-hi); width: 36px; text-align: right; }
+    .sl-val { font-family: var(--font-mono); font-size: 9px; color: var(--text-hi); width: 48px; text-align: right; }
 
     /* Event Log */
     #event-log { font-family: var(--font-mono); font-size: 10px; line-height: 1.6; max-height: 160px; overflow-y: auto; color: var(--text-md); }
@@ -307,6 +307,9 @@
       <div class="sparkline-row"><span class="sl-label">CPU</span><canvas id="cpu-chart"></canvas><span class="sl-val" id="cpu-val">--%</span></div>
       <div class="sparkline-row"><span class="sl-label">TEMP</span><canvas id="temp-chart"></canvas><span class="sl-val" id="temp-val">--°C</span></div>
       <div class="sparkline-row"><span class="sl-label">MEM</span><canvas id="mem-chart"></canvas><span class="sl-val" id="mem-val">--%</span></div>
+      <div id="uptime-line" style="margin-top:6px;font-family:var(--font-mono);font-size:9px;color:var(--text-md);">
+        UPTIME: --
+      </div>
     </div>
 
     <div class="card">
@@ -377,7 +380,7 @@ function updatePower(p) {
   bar.style.width = pct+'%';
   bar.style.background = pct<15?'var(--danger)':pct<30?'var(--warn)':'var(--accent)';
   document.getElementById('batt-pct').textContent = pct.toFixed(0)+'%';
-  document.getElementById('pwr-volt').textContent = (p.voltage_v||0).toFixed(2)+'V';
+  document.getElementById('pwr-volt').textContent = (p.voltage||0).toFixed(2)+'V';
   document.getElementById('pwr-curr').textContent = (p.current_ma||0).toFixed(0)+'mA';
   document.getElementById('pwr-watt').textContent = (p.power_mw||0).toFixed(0)+'mW';
   document.getElementById('power-dot').className = 'dot '+(pct<15?'err':pct<30?'warn':'on');
@@ -416,6 +419,13 @@ function updateSysmon(s) {
   pushChart('cpu-chart',  s.cpu_history||[],  '#58a6ff');
   pushChart('temp-chart', s.temp_history||[], '#f0a500');
   pushChart('mem-chart',  s.mem_history||[],  '#a371f7');
+  const upSec = s.uptime_sec || 0;
+  const hrs = Math.floor(upSec / 3600);
+  const mins = Math.floor((upSec % 3600) / 60);
+  const uptimeEl = document.getElementById('uptime-line');
+  if (uptimeEl) {
+    uptimeEl.textContent = `UPTIME: ${hrs}h ${mins}m`;
+  }
 }
 function pushChart(id, history, color) {
   const c = getOrCreateChart(id, color), last = history.slice(-60);

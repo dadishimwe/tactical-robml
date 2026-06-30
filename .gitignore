@@ -1,0 +1,25 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Runtime data
+data/logs/
+data/videos/
+
+# Environment & secrets
+.env
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Internal planning docs (not for public repo)
+internal/
